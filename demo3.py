@@ -1,15 +1,18 @@
 import numpy as np
 import pandas as pd
 from keras.models import Sequential
-from keras.layers import LSTM, Dense, Dropout
+from keras.layers import LSTM, Dense, Dropout, BatchNormalization
 from sklearn.preprocessing import StandardScaler
+import matplotlib.pyplot as plt
+plt.switch_backend('TkAgg')
 from sklearn.metrics import roc_auc_score, recall_score, precision_score, f1_score, accuracy_score
 from keras.utils import to_categorical
 from keras.models import load_model
+from keras.callbacks import EarlyStopping
 
 
 class LSTMModel:
-    def __init__(self, data_path, time_steps=100, step_forward=0):
+    def __init__(self, data_path, time_steps=100, step_forward=15):
         # 初始化LSTMModel类，设置数据路径、时间步长和前向步数
         self.data_path = data_path
         self.time_steps = time_steps
@@ -32,6 +35,7 @@ class LSTMModel:
         # 预处理数据：加载数据、处理缺失值、转换数据类型和标准化
         data = pd.read_excel(self.data_path)
         data_filled = data.interpolate(method='nearest')  # 使用最近值插值法填充缺失值
+        data_filled.to_csv('data/data_filled.csv')
 
         # 将特定列转换为整数类型
         data_filled['Robot_ProtectiveStop'] = data_filled['Robot_ProtectiveStop'].astype(int)
@@ -50,8 +54,9 @@ class LSTMModel:
         y = data['Robot_ProtectiveStop'].values  # 提取目标变量
 
         # 标准化特征数据
-        scaler = StandardScaler()
-        X_scaled = scaler.fit_transform(X)
+        # scaler = StandardScaler()
+        # X_scaled = scaler.fit_transform(X)
+        X_scaled = X
 
         # 将目标变量转换为二进制分类格式
         y_binary = to_categorical(y)
@@ -59,6 +64,9 @@ class LSTMModel:
 
         # 创建基于时间步长和前向步数的数据集
         X_seq, y_seq, ts = self.create_dataset(X_scaled, y_binary, timestamps)
+        print('X_seq', X_seq.shape)
+        print('y_seq', y_seq.shape)
+        print('ts', ts.shape)
 
         return X_seq, y_seq, ts
 
@@ -79,6 +87,7 @@ class LSTMModel:
         self.model = Sequential([
             # LSTM层，50个单元，输入形状为(时间步长, 特征数)
             LSTM(50, input_shape=(X_train.shape[1], X_train.shape[2])),
+            BatchNormalization(),
             Dropout(0.2),  # Dropout层，防止过拟合
             Dense(2, activation='softmax')  # 全连接层，输出为2个类别的概率分布
         ])
@@ -86,15 +95,32 @@ class LSTMModel:
         # 编译模型，使用二元交叉熵损失函数和Adam优化器
         self.model.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
 
+        # 早停
+        # early_stopping = EarlyStopping(monitor='val_loss',patience=20, restore_best_weights=True)
+
         # 训练模型，设置训练轮数、批量大小和验证集
-        self.model.fit(X_train, y_train, epochs=200, batch_size=32, validation_split=0.1, verbose=2)
+        # history = self.model.fit(X_train, y_train, epochs=200, batch_size=32, validation_split=0.3, verbose=2, callbacks=[early_stopping])
+        history = self.model.fit(X_train, y_train, epochs=120, batch_size=32, validation_split=0.3, verbose=2)
 
         # 保存训练好的模型
-        self.model.save('model/lstm_model.h5')
+        self.model.save('model/lstm_model_15.h5')
+        # 绘制损失曲线
+        self.plot_loss(history)
+
+    def plot_loss(self, history):
+        plt.figure(figsize=(10, 6))
+        plt.plot(history.history['loss'], label='Train Loss')
+        plt.plot(history.history['val_loss'], label='Validation Loss')
+        plt.title('Training and Validation Loss')
+        plt.xlabel('Epochs')
+        plt.ylabel('Loss')
+        plt.legend()
+        plt.savefig('output/plot.png')
+        plt.show()
 
     def evaluate_model(self, X_test, y_test, timestamps):
         # 加载并评估已保存的模型
-        self.model = load_model('model/lstm_model.h5')
+        self.model = load_model('model/lstm_model_15.h5')
 
         # 使用模型进行预测
         y_pred_prob = self.model.predict(X_test)
@@ -130,14 +156,14 @@ model.train_model(X_train, y_train)
 # 评估模型，并返回预测结果
 results_df = model.evaluate_model(X_test, y_test, ts_test)
 
-# 合并预测结果到原始数据
-full_data = pd.read_excel('data/dataset_02052023.xlsx')
-full_data['Timestamp'] = pd.to_datetime(full_data['Timestamp'].str.strip('"'), format='ISO8601')
-# 本地化 results_df 的时间戳为 UTC
-results_df['Timestamp'] = pd.to_datetime(results_df['Timestamp']).dt.tz_localize('UTC')
-# 确认 full_data 的时间戳为 UTC
-full_data['Timestamp'] = pd.to_datetime(full_data['Timestamp']).dt.tz_convert('UTC')
-# 合并数据，将预测结果合并到原始数据中
-merged_data = full_data.merge(results_df.set_index('Timestamp'), how='left', on='Timestamp')
-# 保存结果到CSV文件
-merged_data.to_csv('output/complete_with_predictions.csv')
+# # 合并预测结果到原始数据
+# full_data = pd.read_excel('data/dataset_02052023.xlsx')
+# full_data['Timestamp'] = pd.to_datetime(full_data['Timestamp'].str.strip('"'), format='ISO8601')
+# # 本地化 results_df 的时间戳为 UTC
+# results_df['Timestamp'] = pd.to_datetime(results_df['Timestamp']).dt.tz_localize('UTC')
+# # 确认 full_data 的时间戳为 UTC
+# full_data['Timestamp'] = pd.to_datetime(full_data['Timestamp']).dt.tz_convert('UTC')
+# # 合并数据，将预测结果合并到原始数据中
+# merged_data = full_data.merge(results_df.set_index('Timestamp'), how='left', on='Timestamp')
+# # 保存结果到CSV文件
+# merged_data.to_csv('output/complete_with_predictions.csv')
